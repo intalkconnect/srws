@@ -1,17 +1,16 @@
 {
-  "name": "ws-multitenant-fastify",
+  "name": "ws-multi-empresa",
   "version": "1.0.0",
-  "type": "commonjs",
-  "main": "server.js",
+  "type": "module",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node index.js",
+    "start": "NODE_ENV=production node index.js"
   },
   "dependencies": {
-    "@socket.io/redis-adapter": "^8.2.0",
+    "@fastify/cors": "^10.0.0",
+    "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "fastify-socket.io": "^5.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "redis": "^4.6.13"
+    "fastify-socket.io": "^5.0.0"
   }
 }
