@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "fastify": "^5.0.0", 
-    "@fastify/websocket": "^8.0.0"
+    "@fastify/websocket": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "socket.io": "^4.7.5"
   },
