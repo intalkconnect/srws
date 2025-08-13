@@ -47,10 +47,10 @@ setTimeout(() => {
 }, 5000);
 
 // Inicia o servidor
-fastify.listen({ port: 3000 }, (err) => {
+fastify.listen({ port: 8080 }, (err) => {
   if (err) {
     fastify.log.error(err);
     process.exit(1);
   }
-  console.log('Servidor WebSocket rodando em ws://localhost:3000');
+  console.log('Servidor WebSocket rodando em ws://localhost:8080');
 });
