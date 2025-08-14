@@ -1,98 +1,96 @@
 // index.js
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
-import fastifyIO from 'fastify-socket.io'; // <- usa o plugin que você instalou
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 
-const fastify = Fastify({ logger: true });
-
-// CORS para o front (ajuste "origin" na produção)
-await fastify.register(cors, {
-  origin: (origin, cb) => cb(null, true),
-  credentials: true,
-});
-
-// Socket.IO plugin
-await fastify.register(fastifyIO, {
-  path: '/socket.io',
-  cors: { origin: true, methods: ['GET', 'POST'], credentials: true },
-  serveClient: false,
-});
-
-// Health check HTTP
-fastify.get('/healthz', async () => ({ status: 'ok' }));
-
-// Helper de auth via JWT (opcional, dado que você incluiu jsonwebtoken)
-function authFromSocket(socket) {
-  const token =
-    socket.handshake.auth?.token ||
-    socket.handshake.query?.token ||
-    null;
-
-  if (!token) return { ok: false, reason: 'missing token' };
-
-  try {
-    const payload = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'dev-secret' // troque em produção
-    );
-    return { ok: true, payload };
-  } catch (e) {
-    return { ok: false, reason: 'invalid token' };
-  }
-}
-
-// Eventos Socket.IO
-fastify.io.on('connection', (socket) => {
-  const tenant_id = socket.handshake.query?.tenant_id ?? null;
-  const auth = authFromSocket(socket);
-
-  fastify.log.info(
-    { sid: socket.id, tenant_id },
-    'socket connected attempt'
-  );
-
-  if (!auth.ok) {
-    socket.emit('unauthorized', { reason: auth.reason });
-    socket.disconnect(true);
+// -------- HTTP server (sem framework) --------
+const httpServer = createServer(async (req, res) => {
+  // Health check
+  if (req.method === 'GET' && req.url === '/healthz') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
     return;
   }
 
-  // anexa info do usuário para uso posterior
-  socket.data.user = auth.payload;
+  // Endpoint opcional para emitir eventos via HTTP:
+  // POST /emit { room, event='new_message', payload }
+  if (req.method === 'POST' && req.url === '/emit') {
+    try {
+      const chunks = [];
+      for await (const ch of req) chunks.push(ch);
+      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
 
-  // agrupa por tenant (sala)
-  if (tenant_id) socket.join(`tenant:${tenant_id}`);
+      const { room, event = 'new_message', payload } = body;
+      if (!room) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'room é obrigatório' }));
+        return;
+      }
 
-  // ===== Handlers compatíveis com seu front =====
-  // entrar em salas específicas (ex.: conversa/user_id)
-  socket.on('join_room', (room) => {
-    if (room) socket.join(room);
-  });
+      io.to(room).emit(event, payload);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: String(e?.message || e) }));
+    }
+    return;
+  }
 
-  socket.on('leave_room', (room) => {
-    if (room) socket.leave(room);
-  });
+  // 404
+  res.writeHead(404, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: 'not found' }));
+});
 
-  // identificação opcional (caso seu front envie)
-  socket.on('identify', ({ rooms = [] } = {}) => {
-    rooms.forEach((r) => r && socket.join(r));
-  });
+// -------- Socket.IO --------
+const io = new Server(httpServer, {
+  path: '/socket.io',
+  cors: {
+    origin: process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(',')
+      : true, // ajuste em produção
+    credentials: true
+  },
+  transports: ['websocket'] // prioriza WS
+});
+
+// Middleware de auth opcional (JWT)
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  const secret = process.env.JWT_SECRET; // defina em produção
+
+  if (!secret || !token) return next(); // sem auth obrigatória
+
+  try {
+    socket.data.user = jwt.verify(token, secret);
+    return next();
+  } catch (e) {
+    return next(new Error('unauthorized'));
+  }
+});
+
+// Conexão
+io.on('connection', (socket) => {
+  const tenant = socket.handshake.query?.tenant_id ?? null;
+
+  // room por tenant (opcional)
+  if (tenant) socket.join(`tenant:${tenant}`);
+
+  // ====== Rooms compatíveis com seu front ======
+  socket.on('join_room', (room) => room && socket.join(room));
+  socket.on('leave_room', (room) => room && socket.leave(room));
+
+  // útil para testes: emitir do cliente
+  // socket.emit('new_message', { ... })
 
   socket.on('disconnect', (reason) => {
-    fastify.log.info({ sid: socket.id, reason }, 'socket disconnected');
+    // log simples
+    console.log('socket disconnected', socket.id, reason);
   });
 });
 
-// Endpoint HTTP para disparar eventos a uma sala (ex.: nova mensagem)
-fastify.post('/messages', async (req, reply) => {
-  const { room, event = 'new_message', payload } = req.body || {};
-  if (!room) return reply.code(400).send({ error: 'room é obrigatório' });
-
-  fastify.io.to(room).emit(event, payload);
-  return { ok: true };
+// Sobe servidor
+const PORT = process.env.PORT || 8080;
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Socket server on http://0.0.0.0:${PORT}`);
 });
-
-// Sobe o servidor
-await fastify.listen({ host: '0.0.0.0', port: 8080 });
-fastify.log.info('Socket server on http://0.0.0.0:8080');
