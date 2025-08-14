@@ -1,15 +1,16 @@
+# Estágio de construção
+FROM node:20-alpine as builder
+
+# Instala git e clona o repositório
+RUN apk add --no-cache git && \
+    git clone --depth 1 https://github.com/intalkconnect/srws.git /app_src
+
+# Estágio final
 FROM node:20-alpine
 
-# Instala dependências essenciais
-RUN apk add --no-cache git curl
-
+# Copia apenas o necessário
 WORKDIR /app
-
-# Clona o repositório (com fallback para COPY se falhar)
-RUN git clone https://github.com/intalkconnect/srws.git . || \
-    { echo "Fallback: Copiando código local"; exit 0; }
-
-# Instala dependências
+COPY --from=builder /app_src .
 RUN npm ci --omit=dev
 
 EXPOSE 8080
