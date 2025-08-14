@@ -1,56 +1,52 @@
-// server.js
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ 
+  logger: true,
+  trustProxy: true  // Importante para rodar atrás de proxy
+});
 
-// Registra o plugin WebSocket
-fastify.register(websocket);
+// Configuração WebSocket
+fastify.register(websocket, {
+  options: {
+    path: process.env.SOCKET_PATH || '/ws',
+    maxPayload: 1048576, // 1MB
+    clientTracking: true
+  }
+});
 
-// Rota de conexão WebSocket (com tenant_id)
+// Rota WebSocket
 fastify.get('/ws/:tenant_id', { websocket: true }, (connection, req) => {
-  const { tenant_id } = req.params;
-
-  // Armazena o tenant_id na conexão (opcional, para referência futura)
-  connection.socket.tenant_id = tenant_id;
-
-  // Mensagem de confirmação
-  connection.socket.send(JSON.stringify({ 
-    status: 'connected', 
-    tenant_id,
-    message: 'Conexão WebSocket estabelecida para este tenant.'
-  }));
-
-  // Lógica para mensagens recebidas do frontend (opcional)
+  const tenant_id = req.params.tenant_id;
+  
   connection.socket.on('message', (message) => {
-    console.log(`Mensagem do tenant ${tenant_id}:`, message.toString());
+    console.log(`[${tenant_id}] Mensagem:`, message.toString());
+    
+    // Resposta automática (opcional)
+    connection.socket.send(JSON.stringify({
+      event: 'ack',
+      data: { received: true, timestamp: Date.now() }
+    }));
   });
 
-  // Fecha a conexão se o client desconectar
   connection.socket.on('close', () => {
-    console.log(`Tenant ${tenant_id} desconectado.`);
+    console.log(`[${tenant_id}] Conexão fechada`);
   });
 });
 
-// Função para notificar um tenant específico (chamada pelo worker)
-function notifyTenant(tenant_id, data) {
-  fastify.websocketServer.clients.forEach((client) => {
-    if (client.tenant_id === tenant_id && client.readyState === client.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
-}
-
-// Exemplo: Simulando uma notificação após 5 segundos
-setTimeout(() => {
-  notifyTenant('123', { event: 'nova_mensagem', data: { text: 'Olá, tenant 123!' } });
-}, 5000);
+// Health Check
+fastify.get('/healthz', async () => {
+  return { status: 'ok', timestamp: Date.now() };
+});
 
 // Inicia o servidor
-fastify.listen({ port: 8080 }, (err) => {
+fastify.listen({
+  port: process.env.PORT || 8080,
+  host: '0.0.0.0'  # Crucial para Docker
+}, (err) => {
   if (err) {
     fastify.log.error(err);
     process.exit(1);
   }
-  console.log('Servidor WebSocket rodando em ws://localhost:8080');
+  console.log(`Servidor rodando em ws://0.0.0.0:${fastify.server.address().port}`);
 });
