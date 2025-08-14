@@ -1,18 +1,16 @@
-# Imagem base
 FROM node:20-alpine
 
-# Diretório de trabalho
+# Instala dependências essenciais
+RUN apk add --no-cache git curl
+
 WORKDIR /app
 
+# Clona o repositório (com fallback para COPY se falhar)
+RUN git clone https://github.com/intalkconnect/srws.git . || \
+    { echo "Fallback: Copiando código local"; exit 0; }
+
 # Instala dependências
-COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copia o código
-COPY . .
-
-# Porta exposta
 EXPOSE 8080
-
-# Comando de inicialização
 CMD ["node", "index.js"]
