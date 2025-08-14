@@ -1,95 +1,73 @@
-// index.js
+// index.js (sem CORS)
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 
-// -------- HTTP server (sem framework) --------
+// HTTP básico (só p/ health e, opcional, emissão server-to-server)
 const httpServer = createServer(async (req, res) => {
-  // Health check
   if (req.method === 'GET' && req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-    return;
+    return res.end(JSON.stringify({ status: 'ok' }));
   }
 
-  // Endpoint opcional para emitir eventos via HTTP:
-  // POST /emit { room, event='new_message', payload }
+  // OPCIONAL: emitir eventos via HTTP (use só server-to-server; do browser falhará sem CORS)
   if (req.method === 'POST' && req.url === '/emit') {
     try {
       const chunks = [];
       for await (const ch of req) chunks.push(ch);
-      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
-
-      const { room, event = 'new_message', payload } = body;
+      const { room, event = 'new_message', payload } =
+        JSON.parse(Buffer.concat(chunks).toString() || '{}');
       if (!room) {
         res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 'room é obrigatório' }));
-        return;
+        return res.end(JSON.stringify({ error: 'room é obrigatório' }));
       }
-
       io.to(room).emit(event, payload);
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
+      return res.end(JSON.stringify({ ok: true }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: String(e?.message || e) }));
+      return res.end(JSON.stringify({ error: String(e?.message || e) }));
     }
-    return;
   }
 
-  // 404
   res.writeHead(404, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ error: 'not found' }));
 });
 
-// -------- Socket.IO --------
+// Socket.IO sem CORS e só websocket
 const io = new Server(httpServer, {
   path: '/socket.io',
-  cors: {
-    origin: process.env.CORS_ORIGIN
-      ? process.env.CORS_ORIGIN.split(',')
-      : true, // ajuste em produção
-    credentials: true
-  },
-  transports: ['websocket'] // prioriza WS
+  transports: ['websocket'], // <- só WS (sem polling, logo sem CORS)
+  allowEIO3: false            // padrão; apenas reforçando
 });
 
-// Middleware de auth opcional (JWT)
+// Auth opcional via JWT (não obrigatório)
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.query?.token;
-  const secret = process.env.JWT_SECRET; // defina em produção
-
-  if (!secret || !token) return next(); // sem auth obrigatória
-
+  const secret = process.env.JWT_SECRET;
+  if (!secret || !token) return next();
   try {
     socket.data.user = jwt.verify(token, secret);
-    return next();
-  } catch (e) {
-    return next(new Error('unauthorized'));
+    next();
+  } catch {
+    next(new Error('unauthorized'));
   }
 });
 
-// Conexão
+// Conexões + rooms
 io.on('connection', (socket) => {
   const tenant = socket.handshake.query?.tenant_id ?? null;
-
-  // room por tenant (opcional)
   if (tenant) socket.join(`tenant:${tenant}`);
 
-  // ====== Rooms compatíveis com seu front ======
   socket.on('join_room', (room) => room && socket.join(room));
   socket.on('leave_room', (room) => room && socket.leave(room));
 
-  // útil para testes: emitir do cliente
-  // socket.emit('new_message', { ... })
-
   socket.on('disconnect', (reason) => {
-    // log simples
     console.log('socket disconnected', socket.id, reason);
   });
 });
 
-// Sobe servidor
+// Start
 const PORT = process.env.PORT || 8080;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Socket server on http://0.0.0.0:${PORT}`);
