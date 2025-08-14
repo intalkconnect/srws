@@ -1,67 +1,53 @@
+// server.js
 import Fastify from 'fastify';
-import websocket from '@fastify/websocket';
+import cors from '@fastify/cors';
+import fastifyIO from '@fastify/socket.io';
 
 const fastify = Fastify({ logger: true });
 
-// Registra o plugin WebSocket corretamente
-fastify.register(websocket, {
-  options: {
-    path: '/ws/:tenant_id',  // Define o parâmetro na rota
-    clientTracking: true
-  }
+await fastify.register(cors, {
+  origin: (origin, cb) => cb(null, true), // ajuste para produção
+  credentials: true
 });
 
-// Rota WebSocket com validação
-fastify.get('/ws/:tenant_id', { websocket: true }, (connection, req) => {
-  try {
-    // Verificação robusta do tenant_id
-    const tenant_id = req?.params?.tenant_id;
-    
-    if (!tenant_id) {
-      throw new Error('tenant_id é obrigatório');
-    }
-
-    console.log(`Novo cliente conectado: ${tenant_id}`);
-
-    // Armazena a referência
-    connection.socket.tenant_id = tenant_id;
-
-    // Mensagem de boas-vindas
-    connection.socket.send(JSON.stringify({
-      event: 'connected',
-      tenant_id,
-      timestamp: Date.now()
-    }));
-
-    // Handler de mensagens
-    connection.socket.on('message', (message) => {
-      console.log(`[${tenant_id}] Mensagem:`, message.toString());
-    });
-
-    // Handler de desconexão
-    connection.socket.on('close', () => {
-      console.log(`[${tenant_id}] Conexão fechada`);
-    });
-
-  } catch (error) {
-    console.error('Erro na conexão:', error);
-    connection.socket.close(1008, error.message);
-  }
+await fastify.register(fastifyIO, {
+  path: '/socket.io',
+  cors: { origin: true, methods: ['GET','POST'] }
 });
 
-// Health Check
-fastify.get('/healthz', async () => {
-  return { status: 'ok' };
+// Health check HTTP
+fastify.get('/healthz', async () => ({ status: 'ok' }));
+
+// Eventos socket
+fastify.io.on('connection', (socket) => {
+  const tenant_id = socket.handshake.query?.tenant_id || null;
+
+  fastify.log.info({ id: socket.id, tenant_id }, 'socket connected');
+
+  // se quiser agrupar por tenant:
+  if (tenant_id) socket.join(`tenant:${tenant_id}`);
+
+  // compatível com seu front:
+  socket.on('identify', ({ email, rooms = [] } = {}) => {
+    rooms.forEach((room) => socket.join(room));
+  });
+
+  socket.on('join_room', (room) => socket.join(room));
+  socket.on('leave_room', (room) => socket.leave(room));
+
+  socket.on('disconnect', (reason) => {
+    fastify.log.info({ id: socket.id, reason }, 'socket disconnected');
+  });
 });
 
-// Inicia o servidor
-fastify.listen({
-  host: '0.0.0.0',
-  port: 8080
-}, (err) => {
-  if (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
-  console.log(`Servidor WebSocket rodando em ws://0.0.0.0:8080`);
+// Exemplo de endpoint HTTP que dispara evento para uma sala
+fastify.post('/messages', async (req, reply) => {
+  const { room, event = 'new_message', payload } = req.body || {};
+  if (!room) return reply.code(400).send({ error: 'room é obrigatório' });
+
+  // Envia para quem está nessa sala
+  fastify.io.to(room).emit(event, payload);
+  return { ok: true };
 });
+
+await fastify.listen({ host: '0.0.0.0', port: 8080 });
