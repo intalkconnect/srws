@@ -1,26 +1,27 @@
-// index.js (sem CORS)
+// index.js (sem CORS, sem autenticação)
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
-import jwt from 'jsonwebtoken';
 
-// HTTP básico (só p/ health e, opcional, emissão server-to-server)
+// HTTP básico (health e, opcional, emissão server-to-server)
 const httpServer = createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ status: 'ok' }));
   }
 
-  // OPCIONAL: emitir eventos via HTTP (use só server-to-server; do browser falhará sem CORS)
+  // OPCIONAL: emitir eventos via HTTP (use só server-to-server)
   if (req.method === 'POST' && req.url === '/emit') {
     try {
       const chunks = [];
       for await (const ch of req) chunks.push(ch);
       const { room, event = 'new_message', payload } =
         JSON.parse(Buffer.concat(chunks).toString() || '{}');
+
       if (!room) {
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: 'room é obrigatório' }));
       }
+
       io.to(room).emit(event, payload);
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ ok: true }));
@@ -34,36 +35,37 @@ const httpServer = createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'not found' }));
 });
 
-// Socket.IO sem CORS e só websocket
+// Socket.IO (sem CORS; só WebSocket)
 const io = new Server(httpServer, {
   path: '/socket.io',
-  transports: ['websocket'], // <- só WS (sem polling, logo sem CORS)
-  allowEIO3: false            // padrão; apenas reforçando
+  transports: ['websocket'],
+  allowEIO3: false
 });
 
-// Auth opcional via JWT (não obrigatório)
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
-  const secret = process.env.JWT_SECRET;
-  if (!secret || !token) return next();
-  try {
-    socket.data.user = jwt.verify(token, secret);
-    next();
-  } catch {
-    next(new Error('unauthorized'));
-  }
-});
-
-// Conexões + rooms
+// Conexões + rooms (sem auth)
 io.on('connection', (socket) => {
-  const tenant = socket.handshake.query?.tenant_id ?? null;
-  if (tenant) socket.join(`tenant:${tenant}`);
+  console.log('[io] connected', socket.id);
 
-  socket.on('join_room', (room) => room && socket.join(room));
-  socket.on('leave_room', (room) => room && socket.leave(room));
+  const tenant = socket.handshake.query?.tenant_id ?? null;
+  if (tenant) {
+    socket.join(`tenant:${tenant}`);
+    console.log(`[io] joined tenant room: tenant:${tenant}`);
+  }
+
+  socket.on('join_room', (room) => {
+    if (!room) return;
+    socket.join(room);
+    console.log(`[io] ${socket.id} joined: ${room}`);
+  });
+
+  socket.on('leave_room', (room) => {
+    if (!room) return;
+    socket.leave(room);
+    console.log(`[io] ${socket.id} left: ${room}`);
+  });
 
   socket.on('disconnect', (reason) => {
-    console.log('socket disconnected', socket.id, reason);
+    console.log('[io] disconnected', socket.id, reason);
   });
 });
 
